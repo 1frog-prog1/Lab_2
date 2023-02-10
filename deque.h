@@ -1,561 +1,361 @@
 #pragma once
 #include <iterator>
-#include <memory>
 #include <limits>
+#include <memory>
 
-namespace lol  {
+namespace lab {
     template <typename T>
     class Allocator {
     public:
-        using value_type = T;
-        using size_type = std::size_t;
+        using value_type      = T;
+        using size_type       = std::size_t;
         using difference_type = std::ptrdiff_t;
-        using pointer = T*;
-        using const_pointer = const T*;
-        using reference = T&;
+        using pointer         = T*;
+        using const_pointer   = const T*;
+        using reference       = T&;
         using const_reference = const T&;
 
-        Allocator() noexcept = default;
+        Allocator() noexcept {}
 
-        Allocator(const Allocator& other) noexcept = default;
+        Allocator(const Allocator& other) noexcept {}
 
         template <class U>
-        Allocator(const Allocator<U>& other) noexcept {};
+        Allocator(const Allocator<U>& other) noexcept {}
 
-        ~Allocator() = default;
+        ~Allocator() {}
 
         pointer allocate(size_type n) {
-            return static_cast<pointer>(operator new(sizeof(T) * n));
+            return static_cast<pointer>(::operator new(sizeof(T) * n));
+        }
+
+        void deallocate(pointer p, size_type n) noexcept { delete[] p; }
+
+        template <typename Other>
+        struct rebind {
+            typedef Allocator<Other> other;
         };
 
-        void deallocate(pointer p) noexcept {
-            operator delete(p);
-        }
+        //[[nodiscard]] std::allocation_result<T*> allocate_at_least(
+        // std::size_t n ); // TODO For extra points
     };
 
-    template <typename Type>
-    class Node{
-    public:
-        Type value = NULL;
-        Node* _prev = nullptr;
-        Node* _next = nullptr;
-    };
-
-    template <typename ValueType>
+    template <typename ValueType, typename Reference, typename Pointer>
     class Deque_iterator {
     public:
         using iterator_category = std::random_access_iterator_tag;
-        using value_type = ValueType;
-        using difference_type = std::ptrdiff_t;
-        using pointer = ValueType*;
-        using reference = ValueType&;
+        using value_type        = ValueType;
+        using difference_type   = std::ptrdiff_t;
+        using pointer           = Pointer;
+        using reference         = Reference;
+        using chunk_ptr         = std::__ptr_rebind<pointer, pointer>;
+        using iter_type         = Deque_iterator<value_type, reference, pointer>;
 
-        Node<value_type> *_cur;
+        const static std::size_t CHUNK_SIZE =
+                512 / sizeof(ValueType) == 0 ? 1 : 512 / sizeof(ValueType);
+        pointer _el, _first, _last;
+        chunk_ptr _chunk_ptr;  // chunk - указатель на ячейку в главном массиве
 
-        Deque_iterator() noexcept = default;
-        Deque_iterator(const Deque_iterator& other) noexcept : _cur(other._cur){}
-
-        Deque_iterator& operator=(const Deque_iterator& it){
-            _cur = it._cur;
-            return *this;
+        void _set_chunk(chunk_ptr chunk) {
+            _chunk_ptr = chunk;
+            _first     = *chunk;
+            _last      = *chunk + CHUNK_SIZE;
         }
 
-        Deque_iterator(const pointer it) {
-            _cur = it;
-        }
+        Deque_iterator() noexcept;
 
-        ~Deque_iterator()  = default;
+        Deque_iterator(chunk_ptr chunk, pointer ptr)
+                : _chunk_ptr(chunk),
+                  _first(*chunk),
+                  _last(*chunk + CHUNK_SIZE),
+                  _el(ptr) {}
 
-        friend void swap(Deque_iterator<ValueType>& it1, Deque_iterator<ValueType>& it2) {
-            Deque_iterator <ValueType> tmp = it1;
-            it1 = it2;
-            it2 = tmp;
-        }
+        Deque_iterator(const Deque_iterator& other) noexcept = default;
 
-        friend bool operator==(const Deque_iterator<ValueType>& it1,
-                               const Deque_iterator<ValueType>& it2) {
-            return it1._cur == it2._cur;
-        }
+        Deque_iterator& operator=(const Deque_iterator& other) = default;
 
-        friend bool operator!=(const Deque_iterator<ValueType>& it1,
-                               const Deque_iterator<ValueType>& it2) {
-            return it1._cur != it2._cur;
-        }
+        ~Deque_iterator();
 
-        reference operator*() const {
-            return _cur->value;
-        }
+        friend void swap(Deque_iterator<value_type, reference, pointer>&,
+                         Deque_iterator<value_type, reference, pointer>&);
 
-        pointer operator->() const {
-            return _cur + sizeof(ValueType);
-        }
+        friend bool operator==(const iter_type&, const iter_type&);
+        friend bool operator!=(const iter_type&, const iter_type&);
+
+        reference operator*() const { return *_el; }
+
+        pointer operator->() const { return _el; }
 
         Deque_iterator& operator++() {
-            _cur = _cur->_next;
+            _el++;
+            if (_el == _last) {
+                _set_chunk(_chunk_ptr + 1);
+                _el = _first;
+            }
             return *this;
         }
+
         Deque_iterator operator++(int) {
-            auto tmp = *this;
-            operator++();
-            return tmp;
+            iter_type copy = *this;
+            ++(*this);
+            return copy;
         }
 
         Deque_iterator& operator--() {
-            _cur = _cur->_prev;
+            if (_el == _first) {
+                _set_chunk(_chunk_ptr - 1);
+                _el = _last;
+            }
+            _el--;
             return *this;
-        }
-        Deque_iterator operator--(int) {
-            auto tmp = *this;
-            operator--();
-            return tmp;
         }
 
-        Deque_iterator operator+(const difference_type& n) const {
-            if (n == 0) return *this;
-            auto th = *this;
-            for (auto p = 0; p < n; p++) {
-                th++;
-            }
-            return th;
+        Deque_iterator operator--(int) {
+            iter_type copy = *this;
+            --(*this);
+            return copy;
         }
+
         Deque_iterator& operator+=(const difference_type& n) {
-            _cur = _cur + n;
+            difference_type offset = n + (_el - _first);
+            if (offset >= 0 && offset < CHUNK_SIZE) {
+                _el -= n;
+            } else {
+                difference_type chunk_offset;
+                if (offset < 0)
+                    chunk_offset = difference_type((-offset - 1) / CHUNK_SIZE - 1);
+                else
+                    chunk_offset = difference_type(offset / CHUNK_SIZE);
+                _set_chunk(_chunk_ptr + chunk_offset);
+                _el = _first + (offset - chunk_offset * CHUNK_SIZE);
+            }
             return *this;
+        }
+
+        Deque_iterator& operator-=(const difference_type& n) { return *this += -n; }
+
+        Deque_iterator operator+(const difference_type& n) const {  // + 1
+            iter_type temp = *this;
+            return temp += n;
         }
 
         Deque_iterator operator-(const difference_type& n) const {
-            if (n == 0)
-                return *this;
-            auto th = *this;
-            for (auto p = 0; p < n; p++) {
-                th--;
-            }
-            return th;
+            iter_type temp = *this;
+            return temp -= n;
         }
 
-        Deque_iterator& operator-=(const difference_type& n) {
-            _cur = _cur - n;
-            return *this;
+        difference_type operator-(const iter_type& r) const {
+            return CHUNK_SIZE * (this->_chunk_ptr - r._chunk_ptr) +
+                   (this->_el - this->_first) + (r._first - r._el);
         }
 
-        difference_type operator-(const Deque_iterator& it) const {
-            return abs(_cur - it._cur);
-        }
+        reference operator[](const difference_type& n) { return *(this + n); }
 
-        reference operator[](const difference_type& n) {
-            return *(_cur + n);
-        }
-
-        friend bool operator<(const Deque_iterator<ValueType>& it1,
-                              const Deque_iterator<ValueType>& it2) {
-            return it1._cur < it2._cur;
-        }
-        friend bool operator<=(const Deque_iterator<ValueType>& it1,
-                               const Deque_iterator<ValueType>& it2) {
-            return it1._cur <= it2._cur;
-        }
-        friend bool operator>(const Deque_iterator<ValueType>& it1,
-                              const Deque_iterator<ValueType>& it2) {
-            return it1._cur > it2._cur;
-        }
-        friend bool operator>=(const Deque_iterator<ValueType>& it1,
-                               const Deque_iterator<ValueType>& it2) {
-            return it1._cur >= it2._cur;
-        }
-
-    };
-
-    template <typename ValueType>
-    class Deque_const_iterator {
-        // Shouldn't give non const references on value
-    public:
-        using iterator_category = std::random_access_iterator_tag;
-        using value_type = ValueType;
-        using difference_type = std::ptrdiff_t;
-        using pointer = const ValueType*;
-        using reference = const ValueType&;
-
-        Node<value_type> *_cur;
-
-        Deque_const_iterator() noexcept = default;
-        Deque_const_iterator(const Deque_const_iterator& other) noexcept : _cur(other._cur){};
-
-        Deque_const_iterator& operator=(const Deque_const_iterator& it) {
-            _cur = it._cur;
-            return *this;
-        }
-        Deque_const_iterator& operator=(const Deque_iterator<ValueType>& it) {
-            _cur = it._cur;
-            return *this;
-        }
-
-        ~Deque_const_iterator() = default;
-
-        friend void swap(Deque_const_iterator<ValueType>& it1, Deque_const_iterator<ValueType>& it2) {
-            Deque_const_iterator <ValueType> tmp = it1;
-            it1 = it2;
-            it2 = tmp;
-        }
-
-        friend bool operator==(const Deque_const_iterator<ValueType>& it1,
-                               const Deque_const_iterator<ValueType>& it2) {
-            return it1._cur == it2._cur;
-        }
-
-        friend bool operator!=(const Deque_const_iterator<ValueType>& it1,
-                               const Deque_const_iterator<ValueType>& it2) {
-            return it1._cur != it2._cur;
-        }
-
-        reference operator*() const {
-            return *_cur->value;
-        }
-
-        pointer operator->() const {
-            return _cur + sizeof(ValueType);
-        }
-
-        Deque_const_iterator& operator++() {
-            _cur = _cur->_next;
-            return *this;
-        }
-
-        Deque_const_iterator operator++(int) {
-            auto tmp = *this;
-            operator++();
-            return tmp;
-        }
-
-        Deque_const_iterator& operator--() {
-            _cur = _cur->_prev;
-            return *this;
-        }
-        Deque_const_iterator operator--(int) {
-            auto tmp = *this;
-            operator--();
-            return tmp;
-        }
-
-        Deque_const_iterator operator+(const difference_type& n) const {
-            if (n == 0) return *this;
-            auto th = *this;
-            for (auto p = 0; p < n; p++) {
-                th++;
-            }
-            return th;
-        }
-        Deque_const_iterator& operator+=(const difference_type& n) {
-            _cur = _cur + n;
-            return *this;
-        }
-
-        Deque_const_iterator operator-(const difference_type& n) const {
-            if (n == 0) return *this;
-            auto th = *this;
-            for (auto p = 0; p < n; p++) {
-                th--;
-            }
-            return th;
-        }
-
-        Deque_const_iterator& operator-=(const difference_type& n) {
-            _cur = _cur - n;
-            return *this;
-        }
-
-        difference_type operator-(const Deque_const_iterator& it) const {
-            return abs(_cur - it._cur);
-        }
-
-        reference operator[](const difference_type& n) {
-            return *(_cur + n);
-        }
-
-        friend bool operator<(const Deque_const_iterator<ValueType>& it1,
-                              const Deque_const_iterator<ValueType>& it2) {
-            return it1._cur < it2._cur;
-        }
-        friend bool operator<=(const Deque_const_iterator<ValueType>& it1,
-                               const Deque_const_iterator<ValueType>& it2) {
-            return it1._cur <= it2._cur;
-        }
-        friend bool operator>(const Deque_const_iterator<ValueType>& it1,
-                              const Deque_const_iterator<ValueType>& it2) {
-            return it1._cur > it2._cur;
-        }
-        friend bool operator>=(const Deque_const_iterator<ValueType>& it1,
-                               const Deque_const_iterator<ValueType>& it2) {
-            return it1._cur >= it2._cur;
-        }
+        friend bool operator<(const iter_type&, const iter_type&);
+        friend bool operator<=(const iter_type&, const iter_type&);
+        friend bool operator>(const iter_type&, const iter_type&);
+        friend bool operator>=(const iter_type&, const iter_type&);
         // operator<=> will be handy
-
     };
 
-    template <class Iter>
-    class Deque_reverse_iterator {
-    public:
-        using iterator_type = Iter;
-        using iterator_category =
-                typename std::iterator_traits<Iter>::iterator_category;
-        using value_type = typename std::iterator_traits<Iter>::value_type;
-        using difference_type = typename std::iterator_traits<Iter>::difference_type;
-        using pointer = typename std::iterator_traits<Iter>::pointer;
-        using reference = typename std::iterator_traits<Iter>::reference;
-
-        constexpr Deque_reverse_iterator() = default;
-
-        constexpr explicit Deque_reverse_iterator(iterator_type x) : iter(x) {}
-
-
-        template <class U>
-        constexpr explicit Deque_reverse_iterator(const Deque_reverse_iterator<U>& other) : Iter(other.iter) {}
-
-        template <class U>
-        Deque_reverse_iterator& operator=(const Deque_reverse_iterator<U>& other) {
-            iter = other.iter;
-        }
-
-        iterator_type base() const {
-            return iter;
-        }
-
-        reference operator*() const {
-            return *base();
-        }
-
-        pointer operator->() const {
-            return base();
-        }
-
-        reference operator[](difference_type n) {
-            return *(base() + n);
-        }
-
-        Deque_reverse_iterator& operator++() {
-            --iter;
-            return *this;
-        }
-
-        Deque_reverse_iterator operator++(int) {
-            auto tmp = *this;
-            operator++();
-            return tmp;
-        }
-
-        Deque_reverse_iterator& operator--() {
-            ++iter;
-            return *this;
-        }
-
-        Deque_reverse_iterator operator--(int) {
-            auto tmp = *this;
-            operator--();
-            return tmp;
-        }
-
-        Deque_reverse_iterator operator+(difference_type n) const {
-            iterator_type  it = iter - n;
-            return Deque_reverse_iterator<iterator_type>(it);
-        }
-        Deque_reverse_iterator& operator+=(difference_type n) {
-            iter -= n;
-            return reverse_iterator(iter);
-        }
-
-        Deque_reverse_iterator operator-(difference_type n) const {
-            iterator_type  it = iter + n;
-            return Deque_reverse_iterator<iterator_type>(it);
-        }
-        Deque_reverse_iterator& operator-=(difference_type n) {
-            iter += n;
-            return reverse_iterator(iter);
-        }
-
-        template <class Iterator1, class Iterator2>
-        friend bool operator==(const Deque_reverse_iterator<Iterator1>& lhs,
-                               const Deque_reverse_iterator<Iterator2>& rhs){
-            return lhs.base() == rhs.base();
-        }
-
-        template <class Iterator1, class Iterator2>
-        friend bool operator!=(const Deque_reverse_iterator<Iterator1>& lhs,
-                               const Deque_reverse_iterator<Iterator2>& rhs){
-            return lhs.base() != rhs.base();
-        }
-
-        template <class Iterator1, class Iterator2>
-        friend bool operator>(const Deque_reverse_iterator<Iterator1>& lhs,
-                              const Deque_reverse_iterator<Iterator2>& rhs){
-            return lhs.base() > rhs.base();
-        }
-
-        template <class Iterator1, class Iterator2>
-        friend bool operator<(const Deque_reverse_iterator<Iterator1>& lhs,
-                              const Deque_reverse_iterator<Iterator2>& rhs){
-            return lhs.base() < rhs.base();
-        }
-
-        template <class Iterator1, class Iterator2>
-        friend bool operator<=(const Deque_reverse_iterator<Iterator1>& lhs,
-                               const Deque_reverse_iterator<Iterator2>& rhs){
-            return lhs.base() <= rhs.base();
-        }
-
-        template <class Iterator1, class Iterator2>
-        friend bool operator>=(const Deque_reverse_iterator<Iterator1>& lhs,
-                               const Deque_reverse_iterator<Iterator2>& rhs){
-            return lhs.base() >= rhs.base();
-        }
-
-        template <class IterT>
-        friend Deque_reverse_iterator<IterT> operator+(
-                typename Deque_reverse_iterator<IterT>::difference_type n,
-                const Deque_reverse_iterator<IterT>& it){
-            return Deque_reverse_iterator<IterT>(it.base() - n);
-        }
-
-        template <class Iterator>
-        friend auto operator-(const Deque_reverse_iterator<Iterator>& lhs,
-                              const Deque_reverse_iterator<Iterator>& rhs){
-            return Deque_reverse_iterator<Iterator>(lhs.base() - rhs.base());
-        }
-
-        pointer return__cur() const{
-            return _cur;
-        }
-
-    private:
-        iterator_type iter;
-        value_type* _cur;
-    };
-
-    template <class Iter>
-    Deque_reverse_iterator<Iter> make_reverse_iterator(Iter i) {
-        return Deque_reverse_iterator <Iter>(i);
+    template <typename ValueType, typename Reference, typename Pointer>
+    bool operator==(const Deque_iterator<ValueType, Reference, Pointer>& l,
+                    const Deque_iterator<ValueType, Reference, Pointer>& r) {
+        return l._el == r._el;
     }
 
-    template <typename T, typename Allocator = Allocator<Node<T>>>
+    template <typename ValueType, typename Reference, typename Pointer>
+    bool operator!=(const Deque_iterator<ValueType, Reference, Pointer>& l,
+                    const Deque_iterator<ValueType, Reference, Pointer>& r) {
+        return !(l == r);
+    }
+
+    template <typename ValueType, typename Reference, typename Pointer>
+    bool operator<(const Deque_iterator<ValueType, Reference, Pointer>& l,
+                   const Deque_iterator<ValueType, Reference, Pointer>& r) {
+        return (l._chunk_ptr < r._chunk_ptr) ||
+               (l._chunk_ptr == r._chunk_ptr && l._el < r._el);
+    }
+
+    template <typename ValueType, typename Reference, typename Pointer>
+    bool operator<=(const Deque_iterator<ValueType, Reference, Pointer>& l,
+                    const Deque_iterator<ValueType, Reference, Pointer>& r) {
+        return (l._chunk_ptr < r._chunk_ptr) ||
+               (l._chunk_ptr == r._chunk_ptr && l._el <= r._el);
+    }
+
+    template <typename ValueType, typename Reference, typename Pointer>
+    bool operator>(const Deque_iterator<ValueType, Reference, Pointer>& l,
+                   const Deque_iterator<ValueType, Reference, Pointer>& r) {
+        return (l._chunk_ptr > r._chunk_ptr) ||
+               (l._chunk_ptr == r._chunk_ptr && l._el > r._el);
+    }
+
+    template <typename ValueType, typename Reference, typename Pointer>
+    bool operator>=(const Deque_iterator<ValueType, Reference, Pointer>& l,
+                    const Deque_iterator<ValueType, Reference, Pointer>& r) {
+        return (l._chunk_ptr > r._chunk_ptr) ||
+               (l._chunk_ptr == r._chunk_ptr && l._el >= r._el);
+    }
+
+// operator <=> will be handy
+
+// friend constexpr std::iter_rvalue_reference_t<Iter> iter_move( const
+// std::reverse_iterator& i ); // For extra points
+
+// template<std::indirectly_swappable<Iter> Iter2>
+// friend constexpr void iter_swap(const reverse_iterator& x, const
+// std::reverse_iterator<Iter2>& y); // For extra points
+
+//  template <class Iter>
+//  Deque_reverse_iterator<Iter> make_reverse_iterator(Iter i);
+
+    template <typename T, typename Allocator = Allocator<T>>
     class Deque {
     public:
-        using value_type = T;
-        using allocator_type = Allocator;
-        using size_type = std::size_t;
+        using value_type      = T;
+        using allocator_type  = Allocator;
+        using size_type       = std::size_t;
         using difference_type = std::ptrdiff_t;
-        using reference = value_type&;
+        using reference       = value_type&;
         using const_reference = const value_type&;
-        using pointer = typename std::allocator_traits<Allocator>::pointer;
-        using const_pointer = typename std::allocator_traits<Allocator>::const_pointer;
-        using iterator = Deque_iterator<value_type>;
-        using const_iterator = Deque_const_iterator<value_type>;
-        using reverse_iterator = Deque_reverse_iterator<iterator>;
-        using const_reverse_iterator = Deque_reverse_iterator<const_iterator>;
+        using pointer         = typename std::allocator_traits<Allocator>::pointer;
+        using const_pointer =
+                typename std::allocator_traits<Allocator>::const_pointer;
+        using iterator = Deque_iterator<value_type, reference, pointer>;
+        using const_iterator =
+                Deque_iterator<value_type, const_reference, const_pointer>;
+        using reverse_iterator =
+                std::reverse_iterator<Deque_iterator<iterator, reference, pointer>>;
+        using const_reverse_iterator = std::reverse_iterator<
+                Deque_iterator<iterator, const_reference, const_pointer>>;
 
+    private:
+        using alloc_traits      = std::allocator_traits<allocator_type>;
+        using allocator_pointer = std::__alloc_rebind<allocator_type, pointer>;
+        using chunk_ptr         = std::__ptr_rebind<pointer, pointer>;
+        allocator_pointer _alloc_p;
+        allocator_type _alloc_t;
+        const static size_type CHUNK_SIZE =
+                512 / sizeof(T) == 0 ? 1 : 512 / sizeof(T);
+        chunk_ptr _map;
+        std::size_t _map_capacity, _el_size;
+        iterator _begin, _end;
+
+        void reallocate(std::size_t new_size) {
+            if (_map_capacity == 0) _map_capacity = 8;
+            while (_map_capacity < new_size) _map_capacity << 2;
+            if (_map_capacity > max_size())
+                ;
+            // throw some error
+            chunk_ptr _copy_map = _alloc_p.allocate(_map_capacity);
+            std::size_t ind     = (_map_capacity - new_size) >> 1;
+            for (auto chunkID = _begin._chunk_ptr; chunkID <= _end.chunkID;
+                 chunkID++)
+                _copy_map[ind++] = chunkID;
+            _begin._chunk_ptr = &_map[ind];
+            _end._chunk_ptr   = &_map[ind + (_end.chunkID - _begin._chunk_ptr)];
+            _alloc_p.deallocate(_map);
+            _map = _copy_map;
+        }
+
+    public:
         /// @brief Default constructor. Constructs an empty container with a
         /// default-constructed allocator.
-        Deque() :  size_node(0), first(nullptr), last(nullptr) {}
+        Deque() {
+            _map          = _alloc_p.allocate(8);
+            _map_capacity = 8;
+            _el_size      = 0;
+            _map[4]       = _alloc_t.allocate(CHUNK_SIZE);
+            _begin._el = _end._el = &_map[4][CHUNK_SIZE / 2];
+            _begin._first = _end._first = _map[4];
+            _begin._last = _end._last = _map[4] + CHUNK_SIZE;
+            _begin._chunk_ptr  = &_map[4];
+            _end._chunk_ptr = _begin._chunk_ptr;
+        }
 
         /// @brief Constructs an empty container with the given allocator
-        /// @param alloc allocator to use for all memory allocations of this container
-        explicit Deque(const Allocator& alloc) {
-            Node<value_type> *node = alloc.allocate(1);
-            first = node;
-            last = node;
+        /// @param alloc allocator to use for all memory allocations of this
+        /// container
+        explicit Deque(const Allocator& alloc) : Deque() {
+            _alloc_t = alloc;
+            _alloc_p = static_cast<allocator_pointer>(alloc);
         }
 
         /// @brief Constructs the container with count copies of elements with value
         /// and with the given allocator
         /// @param count the size of the container
         /// @param value the value to initialize elements of the container with
-        /// @param alloc allocator to use for all memory allocations of this container
-        Deque(size_type count, const T& value, const Allocator& alloc = Allocator()){
-            for(auto p = 0; p < count; p++){
-                Node<value_type> *node = alloc.allocate(1);
-                push_back(0);
-            }
+        /// @param alloc allocator to use for all memory allocations of this
+        /// container
+        Deque(size_type count, const T& value, const Allocator& alloc = Allocator())
+                : Deque(alloc) {
+            reallocate(count);
+            for (auto iter = _begin; iter != _begin + count; iter++) *iter = value;
+            _end     = _begin + count;
+            _el_size = count;
         }
 
         /// @brief Constructs the container with count default-inserted instances of
         /// T. No copies are made.
         /// @param count the size of the container
-        /// @param alloc allocator to use for all memory allocations of this container
-        explicit Deque(size_type count, const Allocator& alloc = Allocator()){
-            for(auto p= 0; p < count; p++){
-                push_back(value_type());
-            }
-        }
+        /// @param alloc allocator to use for all memory allocations of this
+        /// container
+        explicit Deque(size_type count, const Allocator& alloc = Allocator())
+                : Deque(count, 0, alloc){};
 
         /// @brief Constructs the container with the contents of the range [first,
         /// last).
         /// @tparam InputIt Input Iterator
         /// @param first, last 	the range to copy the elements from
-        /// @param alloc allocator to use for all memory allocations of this container
+        /// @param alloc allocator to use for all memory allocations of this
+        /// container
         template <class InputIt>
-        Deque(InputIt first, InputIt last, const Allocator& alloc = Allocator()) {
-            for(auto p = first; p != last; p++){
-                push_back(*p);
+        Deque(InputIt first, InputIt last, const Allocator& alloc = Allocator())
+                : Deque(alloc) {
+            reallocate(last - first);
+            auto cur = first;
+            _end     = _begin + (last - first);
+            for (auto iter = _begin; iter != _end; iter++) {
+                *iter = *cur;
+                cur++;
             }
+            _el_size = last - first;
         }
 
         /// @brief Copy constructor. Constructs the container with the copy of the
         /// contents of other.
         /// @param other another container to be used as source to initialize the
         /// elements of the container with
-        Deque(const Deque& other) {
-            size_node = 0;
-            for(auto p = other.begin(); p < other.end(); p++){
-                Node<value_type> *node = allocate.allocate(1);
-                node->_next = nullptr;
-                node->_prev = nullptr;
-                node->value = *p;
-                if(first == nullptr) first = node;
-                if(last != nullptr) last->_next = node;
-                last = std::move(node);
-                size_node++;
-            }
-        }
+        Deque(const Deque& other) : Deque(other._begin, other._end) {}
 
         /// @brief Constructs the container with the copy of the contents of other,
         /// using alloc as the allocator.
         /// @param other another container to be used as source to initialize the
         /// elements of the container with
-        /// @param alloc allocator to use for all memory allocations of this container
-        Deque(const Deque& other, const Allocator& alloc) {
-            size_node = 0;
-            for(auto p = other.begin(); p < other.end(); p++){
-                Node<value_type> *node = alloc.allocate(1);
-                node->_next = nullptr;
-                node->_prev = nullptr;
-                node->value = *p;
-                if(first == nullptr) first = node;
-                if(last != nullptr) last->_next = node;
-                last = std::move(node);
-                size_node++;
-            }
-        }
+        /// @param alloc allocator to use for all memory allocations of this
+        /// container
+        Deque(const Deque& other, const Allocator& alloc)
+                : Deque(other._begin, other._end, alloc) {}
 
         /**
          * @brief Move constructor.
          *
          * Constructs the container with the contents of other using move semantics.
-         * Allocator is obtained by move-construction from the allocator belonging to
-         * other.
+         * Allocator is obtained by move-construction from the allocator belonging
+         * to other.
          *
          * @param other another container to be used as source to initialize the
          * elements of the container with
          */
         Deque(Deque&& other) {
-            size_node = 0;
-            allocate = std::move(other.get_allocator());
-            for(auto p = other.begin(); p < other.end(); p++){
-                Node<value_type> *node = allocate.allocate(1);
-                node->_next = nullptr;
-                node->_prev = last;
-                node->value = std::move(*p);
-                if(first == nullptr) first = node;
-                if(last != nullptr) last->_next = node;
-                last = std::move(node);
-                size_node++;
-            }
+            _map          = other._map;
+            other._map    = nullptr;
+            _alloc_p      = other._alloc_p;
+            _alloc_t      = other._alloc_t;
+            _map_capacity = other._map_capacity;
+            _el_size      = other._el_size;
+            _begin        = other._begin;
+            _end          = other._end;
         }
 
         /**
@@ -566,42 +366,33 @@ namespace lol  {
          *
          * @param other another container to be used as source to initialize the
          * elements of the container with
-         * @param alloc allocator to use for all memory allocations of this container
+         * @param alloc allocator to use for all memory allocations of this
+         * container
          */
-        Deque(Deque&& other, const Allocator& alloc) {
-            this->allocate = alloc;
-            for(auto p = 0; p < other.size(); p++)
-                push_back(other[p]);
+        Deque(Deque&& other, const Allocator& alloc) : Deque(other) {
+            _alloc_p = static_cast<allocator_pointer>(alloc);
+            _alloc_t = alloc;
         }
 
-        /// @brief Constructs the container with the contents of the initializer list
-        /// init.
+        /// @brief Constructs the container with the contents of the initializer
+        /// list init.
         /// @param init initializer list to initialize the elements of the container
         /// with
-        /// @param alloc allocator to use for all memory allocations of this container
-        Deque(std::initializer_list<T> init, const Allocator& alloc = Allocator()) {
-            for(auto p : init)
-                push_back(p);
-        }
+        /// @param alloc allocator to use for all memory allocations of this
+        /// container
+        Deque(std::initializer_list<T> init, const Allocator& alloc = Allocator())
+                : Deque(init.begin(), init.end(), alloc) {}
 
         /// @brief Destructs the deque.
-        ~Deque() {
-            Node<value_type>* _curr = first;
-            while(_curr != nullptr){
-                Node<value_type>* _next = _curr->_next;
-                allocate.deallocate(_curr);
-                _curr = _next;
-            }
-        }
+        ~Deque() { clear(); }
 
-        /// @brief Copy assignment operator. Replaces the contents with a copy of the
-        /// contents of other.
+        /// @brief Copy assignment operator. Replaces the contents with a copy of
+        /// the contents of other.
         /// @param other another container to use as data source
         /// @return *this
         Deque& operator=(const Deque& other) {
-            clear();
-            for(auto p = 0; p < other.size(); p++)
-                push_back(other[p]);
+            *this = Deque(other.begin(), other.end());  // move???
+            return *this;
         }
 
         /**
@@ -616,8 +407,16 @@ namespace lol  {
          */
         Deque& operator=(Deque&& other) {
             clear();
-            for(auto p = 0; p < other.size(); p++)
-                push_back(std::move(other[p]));
+            _map          = other._map;
+            other._map    = nullptr;
+            _alloc_p      = other._alloc_p;
+            _alloc_t      = other._alloc_t;
+            _map_capacity = other._map_capacity;
+            _el_size      = other._el_size;
+            _begin        = other._begin;
+            _end          = other._end;
+
+            return *this;
         }
 
         /// @brief Replaces the contents with those identified by initializer list
@@ -625,16 +424,15 @@ namespace lol  {
         /// @param ilist
         /// @return this
         Deque& operator=(std::initializer_list<T> ilist) {
-            clear();
-            for(auto p: ilist)
-                push_back(*p);
+            *this = Deque(ilist.begin(), ilist.end());
+            return *this;
         }
 
         /// @brief Replaces the contents with count copies of value
         /// @param count
         /// @param value
         void assign(size_type count, const T& value) {
-            resize(count, value);
+            *this = Deque(count, value);
         }
 
         /// @brief Replaces the contents with copies of those in the range [first,
@@ -644,105 +442,85 @@ namespace lol  {
         /// @param last
         template <class InputIt>
         void assign(InputIt first, InputIt last) {
-            clear();
-            for(auto p = first; p != last; p++)
-                push_back(*p);
+            *this = Deque(first, last);
         }
 
         /// @brief Replaces the contents with the elements from the initializer list
         /// ilis
         /// @param ilist
         void assign(std::initializer_list<T> ilist) {
-            assign(ilist.begin(), ilist.end());
+            *this = Deque(ilist);
         }
 
         /// @brief Returns the allocator associated with the container.
         /// @return The associated allocator.
-        allocator_type get_allocator() const noexcept{
-            return allocate;
-        }
+        allocator_type get_allocator() const noexcept { return _alloc_t; }
 
         /// ELEMENT ACCESS
 
-        /// @brief Returns a reference to the element at specified location pos, with
-        /// bounds checking. If pos is not within the range of the container, an
-        /// exception of type std::out_of_range is thrown.
+        /// @brief Returns a reference to the element at specified location pos,
+        /// with bounds checking. If pos is not within the range of the container,
+        /// an exception of type std::out_of_range is thrown.
         /// @param pos position of the element to return
         /// @return Reference to the requested element.
         /// @throw std::out_of_range
-        reference at(size_type pos){
-            ++pos;
-            if(pos > size_node)
-                throw std::out_of_range("out_of_range");
+        reference at(size_type pos) {
+            if (pos >= _el_size || pos < 0)
+                throw std::out_of_range("The position is out of range of deque");
             else
-                return operator[](pos);
+                return (*this)[pos];
         }
 
-        /// @brief Returns a const reference to the element at specified location pos,
-        /// with bounds checking. If pos is not within the range of the container, an
-        /// exception of type std::out_of_range is thrown.
+        /// @brief Returns a const reference to the element at specified location
+        /// pos, with bounds checking. If pos is not within the range of the
+        /// container, an exception of type std::out_of_range is thrown.
         /// @param pos position of the element to return
         /// @return Const Reference to the requested element.
         /// @throw std::out_of_range
-        const_reference at(size_type pos) const{
-            ++pos;
-            if(pos > size_node)
-                throw std::out_of_range("out_of_range");
+        const_reference at(size_type pos) const {
+            if (pos >= _el_size || pos < 0)
+                throw std::out_of_range("The position is out of range of deque");
             else
-                return operator[](pos);
-
+                return (*this)[pos];
         }
 
         /// @brief Returns a reference to the element at specified location pos. No
         /// bounds checking is performed.
         /// @param pos position of the element to return
         /// @return Reference to the requested element.
-        reference operator[](size_type pos){
-            size_type t = 0;
-            for(Node<value_type>*_curr = first; _curr != nullptr; _curr = _curr->_next){
-                if(pos == t) return _curr->value;
-                t++;
-            }
-        }
+        reference operator[](size_type pos) { return *(_begin + pos); }
 
-        /// @brief Returns a const reference to the element at specified location pos.
-        /// No bounds checking is performed.
+        /// @brief Returns a const reference to the element at specified location
+        /// pos. No bounds checking is performed.
         /// @param pos position of the element to return
         /// @return Const Reference to the requested element.
-        const_reference operator[](size_type pos) const{
-            size_type t = 0;
-            for(Node<value_type>*_curr = first; _curr != nullptr; _curr = _curr->_next){
-                if(pos == t) return _curr->value;
-                t++;
-            }
+        const_reference operator[](size_type pos) const {
+            return *static_cast<const_iterator>(_begin + pos);
         }
 
         /// @brief Returns a reference to the first element in the container.
         /// Calling front on an empty container is undefined.
         /// @return Reference to the first element
-        reference front() {
-            return first->value;
-        }
+        reference front() { return *_begin; }
 
         /// @brief Returns a const reference to the first element in the container.
         /// Calling front on an empty container is undefined.
         /// @return Const reference to the first element
-        const_reference front() const{
-            return first->value;
+        const_reference front() const {
+            return *static_cast<const_iterator>(
+                    _begin);
         }
 
         /// @brief Returns a reference to the last element in the container.
         /// Calling back on an empty container causes undefined behavior.
         /// @return Reference to the last element.
-        reference back(){
-            last->value;
-        }
+        reference back() { return *(_end - 1); }
 
         /// @brief Returns a const reference to the last element in the container.
         /// Calling back on an empty container causes undefined behavior.
         /// @return Const Reference to the last element.
-        const_reference back() const{
-            last->value;
+        const_reference back() const {
+            return *static_cast<const_iterator>(_end - 1);
         }
 
         /// ITERATORS
@@ -750,135 +528,138 @@ namespace lol  {
         /// @brief Returns an iterator to the first element of the deque.
         /// If the deque is empty, the returned iterator will be equal to end().
         /// @return Iterator to the first element.
-        iterator begin() noexcept {
-            iterator it;
-            it._cur = first;
-            return it;
-        }
+        iterator begin() noexcept { return _begin; }
 
         /// @brief Returns an iterator to the first element of the deque.
         /// If the deque is empty, the returned iterator will be equal to end().
         /// @return Iterator to the first element.
-        const_iterator begin() const noexcept{
-            const_iterator it;
-            it._cur = first;
-            return it;
+        const_iterator begin() const noexcept {
+            return static_cast<const_iterator>(_begin);
         }
 
         /// @brief Same to begin()
-        const_iterator cbegin() const noexcept{
-            const_iterator it;
-            it._cur = first;
-            return it;
+        const_iterator cbegin() const noexcept {
+            return static_cast<const_iterator>(_begin);
         }
 
         /// @brief Returns an iterator to the element following the last element of
         /// the deque. This element acts as a placeholder; attempting to access it
         /// results in undefined behavior.
         /// @return Iterator to the element following the last element.
-        iterator end() noexcept {
-            iterator it;
-            it._cur = last;
-            return it;
-        }
+        iterator end() noexcept { return _end; }
 
         /// @brief Returns an constant iterator to the element following the last
         /// element of the deque. This element acts as a placeholder; attempting to
         /// access it results in undefined behavior.
         /// @return Constant Iterator to the element following the last element.
-        const_iterator end() const noexcept{
-            const_iterator it;
-            it._cur = last;
-            return it;
+        const_iterator end() const noexcept {
+            return static_cast<const_iterator>(_end);
         }
 
         /// @brief Same to end()
-        const_iterator cend() const noexcept{
-            const_iterator it;
-            it._cur = last;
-            return it;
+        const_iterator cend() const noexcept {
+            return static_cast<const_iterator>(_end);
         }
 
         /// @brief Returns a reverse iterator to the first element of the reversed
         /// deque. It corresponds to the last element of the non-reversed deque. If
         /// the deque is empty, the returned iterator is equal to rend().
         /// @return Reverse iterator to the first element.
-        reverse_iterator rbegin() noexcept{
-            reverse_iterator it(begin());
-            return it;
+        reverse_iterator rbegin() noexcept {
+            return static_cast<reverse_iterator>(_begin);
         }
 
         /// @brief Returns a const reverse iterator to the first element of the
         /// reversed deque. It corresponds to the last element of the non-reversed
         /// deque. If the deque is empty, the returned iterator is equal to rend().
         /// @return Const Reverse iterator to the first element.
-        const_reverse_iterator rbegin() const noexcept{
-            reverse_iterator it(begin());
-            return it;
+        const_reverse_iterator rbegin() const noexcept {
+            return static_cast<const_reverse_iterator>(_begin - 1);
         }
 
         /// @brief Same to rbegin()
-        const_reverse_iterator crbegin() const noexcept{
-            reverse_iterator it(begin());
-            return it;
+        const_reverse_iterator crbegin() const noexcept {
+            return static_cast<const_reverse_iterator>(_begin - 1);
         }
 
         /// @brief Returns a reverse iterator to the element following the last
-        /// element of the reversed deque. It corresponds to the element preceding the
-        /// first element of the non-reversed deque. This element acts as a
+        /// element of the reversed deque. It corresponds to the element preceding
+        /// the first element of the non-reversed deque. This element acts as a
         /// placeholder, attempting to access it results in undefined behavior.
         /// @return Reverse iterator to the element following the last element.
-        reverse_iterator rend() noexcept{
-            reverse_iterator it(end());
-            return it;
+        reverse_iterator rend() noexcept {
+            return static_cast<reverse_iterator>(_end - 1);
         }
 
-        /// @brief Returns a const reverse iterator to the element following the last
-        /// element of the reversed deque. It corresponds to the element preceding the
-        /// first element of the non-reversed deque. This element acts as a
-        /// placeholder, attempting to access it results in undefined behavior.
-        /// @return Const Reverse iterator to the element following the last element.
-        const_reverse_iterator rend() const noexcept{
-            reverse_iterator it(begin());
-            return it;
+        /// @brief Returns a const reverse iterator to the element following the
+        /// last element of the reversed deque. It corresponds to the element
+        /// preceding the first element of the non-reversed deque. This element acts
+        /// as a placeholder, attempting to access it results in undefined behavior.
+        /// @return Const Reverse iterator to the element following the last
+        /// element.
+        const_reverse_iterator rend() const noexcept {
+            return static_cast<const_reverse_iterator>(_end - 1);
         }
 
         /// @brief Same to rend()
-        const_reverse_iterator crend() const noexcept{
-            reverse_iterator it(begin());
-            return it;
+        const_reverse_iterator crend() const noexcept {
+            return static_cast<const_reverse_iterator>(_end - 1);
         }
 
         /// CAPACITY
 
         /// @brief Checks if the container has no elements
         /// @return true if the container is empty, false otherwise
-        bool empty() const noexcept{
-            return (first == nullptr);
-        }
+        bool empty() const noexcept { return !_el_size; }
 
         /// @brief Returns the number of elements in the container
         /// @return The number of elements in the container.
-        size_type size() const noexcept{
-            return size_node;
-        }
+        size_type size() const noexcept { return _el_size; }
 
         /// @brief Returns the maximum number of elements the container is able to
         /// hold due to system or library implementation limitations
         /// @return Maximum number of elements.
-        size_type max_size() const noexcept{
-            return std::numeric_limits<size_t>::max();
+        size_type max_size() const noexcept {
+            return std::min(alloc_traits::max_size(),
+                            std::numeric_limits<difference_type>::max());
         }
 
         /// @brief Requests the removal of unused capacity.
         /// It is a non-binding request to reduce the memory usage without changing
         /// the size of the sequence. All iterators and references are invalidated.
         /// Past-the-end iterator is also invalidated.
-        void shrink_to_fit(){
-            for(auto p = this->first(); p != this->last; p++){
-                if (*p == nullptr)
-                    this->erase(p);
+        void shrink_to_fit() {
+            chunk_ptr _new_map =
+                    _alloc_p.allocate(_end._chunk_ptr - _begin._chunk_ptr + 1);
+            _new_map[0]     = _alloc_t(_begin._last - _begin._el);
+            size_type _size = _el_size;
+            {
+                size_type i = 0;
+                for (auto ptr = _begin._first; ptr != _begin._last; ptr++)
+                    _new_map[0][i++] = *ptr;
             }
+
+            if (_end._chunk_ptr != _begin._chunk_ptr) {
+                _new_map[_end._chunk_ptr - _begin._chunk_ptr] =
+                        _alloc_t(_end._el - _end._first + 1);
+                {
+                    size_type i = 0;
+                    for (auto ptr = _end._first; ptr != (_end._el + 1); ptr++)
+                        _new_map[_end._chunk_ptr - _begin._chunk_ptr][i++] = *ptr;
+                }
+
+                {
+                    size_type chunkID = 1;
+                    for (auto chunk_ptr = _begin._chunk_ptr + 1;
+                         chunk_ptr != _end._chunk_ptr; chunk_ptr++)
+                        _new_map[chunkID++] = chunk_ptr;
+                }
+            }
+
+            _map.clear();
+            _map     = _new_map;
+            _el_size = _size;
+            _map_capacity = _size;  // проверить как capacity в других функциях
         }
 
         /// MODIFIERS
@@ -887,43 +668,38 @@ namespace lol  {
         /// nvalidates any references, pointers, or iterators referring to contained
         /// elements. Any past-the-end iterators are also invalidated.
         void clear() noexcept {
-            while (size() != 0)
-                pop_back();
+            for (auto iter = _begin; iter != _end; iter++)
+                alloc_traits::destroy(_alloc_t, &(*iter));
+
+            if (_begin._chunk_ptr == _end._chunk_ptr)
+                _alloc_p.deallocate(_begin._chunk_ptr, size());
+
+            else {
+                _alloc_p.deallocate(_begin._chunk_ptr, abs(_begin._el - _begin._last));
+                _alloc_p.deallocate(_end._chunk_ptr, abs(_begin._el - _begin._first));
+                for (auto chunkID = _begin._chunk_ptr + 1; chunkID < _end._chunk_ptr;
+                     chunkID++) {
+                    _alloc_p.deallocate(chunkID, CHUNK_SIZE);
+                }
+                _alloc_p.deallocate(_map, 0);
+                _el_size      = 0;
+                _map_capacity = 0;
+            }
         }
 
         /// @brief Inserts value before pos.
         /// @param pos iterator before which the content will be inserted.
         /// @param value element value to insert
         /// @return Iterator pointing to the inserted value.
-        iterator insert(const_iterator pos, const T& value){
-            Node<value_type>* _curr = allocate.allocate(1);
-            _curr->_next = pos._cur;
-            _curr->_prev = pos._cur->_prev;
-            pos._cur->_prev->_next = _curr;
-            pos._cur->_prev = _curr;
-            _curr->value = value;
-            size_node++;
-            iterator it;
-            it._cur = _curr;
-            return it;
+        iterator insert(const_iterator pos, const T& value) {
+            // реализовать отдельную функцию сдвига элементов
         }
 
         /// @brief Inserts value before pos.
         /// @param pos iterator before which the content will be inserted.
         /// @param value element value to insert
         /// @return Iterator pointing to the inserted value.
-        iterator insert(const_iterator pos, T&& value){
-            Node<value_type>* _curr = allocate.allocate(1);
-            _curr->_next = pos._cur;
-            _curr->_prev = pos._cur->_prev;
-            pos._cur->_prev->_next = _curr;
-            pos._cur->_prev = _curr;
-            _curr->value = value;
-            size_node++;
-            iterator it;
-            it._cur = _curr;
-            return it;
-        }
+        iterator insert(const_iterator pos, T&& value);
 
         /// @brief Inserts count copies of the value before pos.
         /// @param pos iterator before which the content will be inserted.
@@ -931,297 +707,166 @@ namespace lol  {
         /// @param value element value to insert
         /// @return Iterator pointing to the first element inserted, or pos if count
         /// == 0.
-        iterator insert(const_iterator pos, size_type count, const T& value){
-            Node<value_type>* _current;
-            for(auto p = 0; p < count; p++){
-                Node<value_type>* _curr = allocate.allocate(1);
-                _curr->_next = pos._cur;
-                _curr->_prev = pos._cur->_prev;
-                pos._cur->_prev->_next = _curr;
-                pos._cur->_prev = _curr;
-                _curr->value = value;
-                size_node++;
-                _current = _curr;
-            }
-            iterator it;
-            it._cur = _current;
-            return it;
-        }
+        iterator insert(const_iterator pos, size_type count, const T& value);
 
         /// @brief Inserts elements from range [first, last) before pos.
         /// @tparam InputIt Input Iterator
         /// @param pos iterator before which the content will be inserted.
-        /// @param first,last the range of elements to insert, can't be iterators into
-        /// container for which insert is called
+        /// @param first,last the range of elements to insert, can't be iterators
+        /// into container for which insert is called
         /// @return Iterator pointing to the first element inserted, or pos if first
         /// == last.
         template <class InputIt>
-        iterator insert(const_iterator pos, InputIt first, InputIt last){
-            Node<value_type>* _current;
-            for(auto p = first; p != last; p++){
-                Node<value_type>* _curr = allocate.allocate(1);
-                _curr->_next = pos._cur;
-                _curr->_prev = pos._cur->_prev;
-                pos._cur->_prev->_next = _curr;
-                pos._cur->_prev = _curr;
-                _curr->value = *p;
-                size_node++;
-                _current = _curr;
-            }
-            iterator it;
-            it._cur = _current;
-            return it;
-        }
+        iterator insert(const_iterator pos, InputIt first, InputIt last);
 
         /// @brief Inserts elements from initializer list before pos.
         /// @param pos iterator before which the content will be inserted.
         /// @param ilist initializer list to insert the values from
         /// @return Iterator pointing to the first element inserted, or pos if ilist
         /// is empty.
-        iterator insert(const_iterator pos, std::initializer_list<T> ilist){
-            Node<value_type>* _current;
-            for(auto p: ilist){
-                Node<value_type>* _curr = allocate.allocate(1);
-                _curr->_next = pos._cur;
-                _curr->_prev = pos._cur->_prev;
-                pos._cur->_prev->_next = _curr;
-                pos._cur->_prev = _curr;
-                _curr->value = p;
-                size_node++;
-                _current = _curr;
-            }
-            iterator it;
-            it._cur = _current;
-            return it;
-        }
+        iterator insert(const_iterator pos, std::initializer_list<T> ilist);
 
         /// @brief Inserts a new element into the container directly before pos.
         /// @param pos iterator before which the new element will be constructed
         /// @param ...args arguments to forward to the constructor of the element
         /// @return terator pointing to the emplaced element.
         template <class... Args>
-        iterator emplace(const_iterator pos, Args&&... args){
-            auto new_value = value_type(args...);
-            return this->insert(pos, new_value);
-        }
+        iterator emplace(const_iterator pos, Args&&... args);
 
         /// @brief Removes the element at pos.
         /// @param pos iterator to the element to remove
         /// @return Iterator following the last removed element.
-        iterator erase(const_iterator pos){
-            if(pos._cur == first){
-                if(size_node != 1) {
-                    Node<value_type> *_cur = first;
-                    first = first->_next;
-                    first->_prev = nullptr;
-                    size_node--;
-                    allocate.deallocate(_cur);
-                }
-                else clear();
-                iterator it;
-                it._cur = first;
-                return it;
-            }
-            if(pos._cur == last){
-                Node<value_type> *_cur = last;
-                last = last->_prev;
-                last->_next = nullptr;
-                size_node--;
-                iterator it;
-                it._cur = last;
-                return it;
-            }
-            Node<value_type> *_cur = pos._cur->_next;
-            pos._cur->_prev->_next = pos._cur->_next;
-            pos._cur->_next->_prev = pos._cur->_prev;
-            size_node--;
-            allocate.deallocate(pos._cur);
-            iterator it;
-            it._cur = _cur;
-            return it;
-        }
+        iterator erase(const_iterator pos);
 
         /// @brief Removes the elements in the range [first, last).
         /// @param first,last range of elements to remove
         /// @return Iterator following the last removed element.
-        iterator erase(const_iterator first, const_iterator last){
-            if(last == cend() && first == cbegin()){
-                clear();
-                iterator it;
-                it._cur = this->first;
-                return it;
-            }
-            if(first == cbegin()) {
-                this->first = last._cur;
-                this->first->_prev = nullptr;
-            }
-            const_iterator _curr = first;
-            while (_curr._cur != last._cur){
-                erase(_curr);
-                _curr++;
-                size_node--;
-            }
-            iterator it;
-            it._cur = last._cur;
-            return it;
-        }
+        iterator erase(const_iterator first, const_iterator last);
 
         /// @brief Appends the given element value to the end of the container.
         /// The new element is initialized as a copy of value.
         /// @param value the value of the element to append
-        void push_back(const T& value){
-            Node<value_type> *node = get_allocator().allocate(1);
-            node->_next = nullptr;
-            node->_prev = last;
-            node->value = value;
-            if(!empty()){
-                last -> _next = node;
-                last = node;
+        void push_back(const T& value) {
+            _el_size++;
+            if (_end._el == _end._last) {
+                if (_end._chunk_ptr == &_map[_map_capacity - 1])
+                    reallocate(_el_size);
+                else
+                    _end++;  // сюда мы входим если _end находится на ячейке сразу
+                // после НЕ ПОСЛЕДНЕГО чанка
+                *_end = value;
+                _end++;
             }
-            else{
-                first = node;
-                last = node;
-            }
-            size_node++;
         }
 
         /// @brief Appends the given element value to the end of the container.
         /// Value is moved into the new element.
         /// @param value the value of the element to append
-        void push_back(T&& value){
-            Node<value_type> *node = get_allocator().allocate(1);
-            node->_next = nullptr;
-            node->_prev = last;
-            node->value = std::move(value);
-            if(!empty()){
-                last -> _next = node;
-                last = node;
+        void push_back(T&& value) {
+            _el_size++;
+            if (_end._el == _end._last) {
+                if (_end._chunk_ptr == &_map[_map_capacity - 1])
+                    reallocate(_el_size);
+                else
+                    _end++;  // сюда мы входим если _end находится на ячейке сразу
+                // после НЕ ПОСЛЕДНЕГО чанка
+                *_end = std::move(value);
+                _end++;
             }
-            else{
-                first = node;
-                last = node;
-            }
-            size_node++;
         }
 
         /// @brief Appends a new element to the end of the container.
         /// @param ...args arguments to forward to the constructor of the element
         /// @return A reference to the inserted element.
         template <class... Args>
-        reference emplace_back(Args&&... args){
-            push_back(value_type(args...));
-            return last->value;
+        reference emplace_back(T&& first, Args&&... args) {
+            this->push_back(first);
+            this->emplace_back(args...);  // нужно смотреть, чтоб не зациклилось
+            return back();
         }
 
         /// @brief Removes the last element of the container.
-        void pop_back(){
-            if(first == last){
-                allocate.deallocate(first);
-                first = nullptr;
-                last = nullptr;
-                size_node--;
-                return;
-            }
-            Node<value_type>* d = last;
-            last = last->_prev;
-            last->_next = nullptr;
-            get_allocator().deallocate(d);
-            size_node--;
+        void pop_back() {
+            if (_begin == _end) return;
+            alloc_traits::destroy(_alloc_t, &back());
+            _el_size--;
+            _end--;
         }
 
-        /// @brief Prepends the given element value to the beginning of the container.
+        /// @brief Prepends the given element value to the beginning of the
+        /// container.
         /// @param value the value of the element to prepend
-        void push_front(const T& value){
-            Node<value_type>* node = get_allocator().allocate(1);
-            node->_next = first;
-            node->_prev = nullptr;
-            node->value = value;
-            if (empty()){
-                first = node;
-                last = node;
-                return;
+        void push_front(const T& value) {
+            _el_size++;
+            if (_begin._el == _begin._first) {
+                if (_begin._chunk_ptr == &_map[0])
+                    reallocate(_el_size);
+                else
+                    _begin--;
+                *_begin = value;
+                _begin--;
             }
-            first->_prev = node;
-            first = node;
-            size_node++;
         }
 
-        /// @brief Prepends the given element value to the beginning of the container.
+        /// @brief Prepends the given element value to the beginning of the
+        /// container.
         /// @param value moved value of the element to prepend
-        void push_front(T&& value){
-            Node<value_type>* node = get_allocator().allocate(1);
-            node->_next = first;
-            node->_prev = nullptr;
-            node->value = std::move(value);
-            if (empty()){
-                first = node;
-                last = node;
-                return;
+        void push_front(T&& value) {
+            _el_size++;
+            if (_begin._el == _begin._first) {
+                if (_begin._chunk_ptr == &_map[0])
+                    reallocate(_el_size);
+                else
+                    _begin--;
+                *_begin = std::move(value);
+                _begin--;
             }
-            first->_prev = node;
-            first = node;
-            size_node++;
         }
 
         /// @brief Inserts a new element to the beginning of the container.
         /// @param ...args arguments to forward to the constructor of the element
         /// @return A reference to the inserted element.
         template <class... Args>
-        reference emplace_front(Args&&... args){
-            auto new_value = value_type(args...);
-            push_front(new_value);
+        reference emplace_front(T&& first, Args&&... args) {
+            this->push_front(first);
+            this->template emplace_front(args...);
             return front();
         }
 
         /// @brief Removes the first element of the container.
-        void pop_front(){
-            Node<value_type> *n = first->_next;
-            Node<value_type> *c = first;
-            n->_prev = nullptr;
-            allocate.deallocate(c);
-            size_node--;
+        void pop_front() {
+            if (_begin == _end) return;
+            delete *_begin;
+            _el_size--;
+            _begin++;
         }
 
         /// @brief Resizes the container to contain count elements.
-        /// If the current size is greater than count, the container is reduced to its
-        /// first count elements. If the current size is less than count, additional
-        /// default-inserted elements are appended
+        /// If the current size is greater than count, the container is reduced to
+        /// its first count elements. If the current size is less than count,
+        /// additional default-inserted elements are appended
         /// @param count new size of the container
-        void resize(size_type count){
-            while(size_node > count)
-                pop_back();
-            while(count > size_node){
-                push_back(value_type());
-            }
-        }
+        void resize(size_type count) { resize(count, 0); }
 
         /// @brief Resizes the container to contain count elements.
-        /// If the current size is greater than count, the container is reduced to its
-        /// first count elements. If the current size is less than count, additional
-        /// copies of value are appended.
+        /// If the current size is greater than count, the container is reduced to
+        /// its first count elements. If the current size is less than count,
+        /// additional copies of value are appended.
         /// @param count new size of the container
         /// @param value the value to initialize the new elements with
-        void resize(size_type count, const value_type& value){
-            while(size_node > count)
-                pop_back();
-            while(count > size_node){
-                push_back(value);
-            }
+        void resize(size_type count, const value_type& value) {
+            if (count > _el_size)
+                while (count > _el_size) push_back(value);
+            else if (count < _el_size)
+                while (count < _el_size) pop_back();
         }
 
         /// @brief Exchanges the contents of the container with those of other.
-        /// Does not invoke any move, copy, or swap operations on individual elements.
-        /// All iterators and references remain valid. The past-the-end iterator is
-        /// invalidated.
+        /// Does not invoke any move, copy, or swap operations on individual
+        /// elements. All iterators and references remain valid. The past-the-end
+        /// iterator is invalidated.
         /// @param other container to exchange the contents with
-        void swap(Deque& other){
-            Node<value_type>* a = first;
-            Node<value_type>* b = last;
-            first = other.first;
-            other.first = a;
-            last = other.last;
-            other.last = b;
-        }
+        void swap(Deque& other);
 
         /// COMPARISIONS
 
@@ -1229,11 +874,16 @@ namespace lol  {
         /// @param lhs,rhs deques whose contents to compare
         template <class U, class Alloc>
         friend bool operator==(const Deque<U, Alloc>& lhs,
-                               const Deque<U, Alloc>& rhs){
-            if(lhs.size() != rhs.size()) return false;
-            for(auto p = 0; p < lhs.size(); p++){
-                if(lhs[p] != rhs[p]) return false;
+                               const Deque<U, Alloc>& rhs) {
+            if (lhs.size() != rhs.size()) return false;
+
+            auto lhs_iter = lhs.begin(), rhs_iter = rhs.begin();
+            while (lhs_iter != lhs.end()) {
+                if (*lhs_iter != *rhs_iter) return false;
+                lhs_iter++;
+                rhs_iter++;
             }
+
             return true;
         }
 
@@ -1241,103 +891,100 @@ namespace lol  {
         /// @param lhs,rhs deques whose contents to compare
         template <class U, class Alloc>
         friend bool operator!=(const Deque<U, Alloc>& lhs,
-                               const Deque<U, Alloc>& rhs){
+                               const Deque<U, Alloc>& rhs) {
             return !(lhs == rhs);
         }
 
         /// @brief Compares the contents of lhs and rhs lexicographically.
         /// @param lhs,rhs deques whose contents to compare
         template <class U, class Alloc>
-        friend bool operator>(const Deque<U, Alloc>& lhs, const Deque<U, Alloc>& rhs){
-            if (lhs.size() < rhs.size()) return false;
-            if (lhs.size() > rhs.size()) return true;
-            for(auto p = 0; p < lhs.size(); p++){
-                if(lhs[p] > rhs[p]) return true;
-                if(lhs[p] < rhs[p]) return false;
+        friend bool operator>(const Deque<U, Alloc>& lhs,
+                              const Deque<U, Alloc>& rhs) {
+            auto lhs_iter = lhs.begin(), rhs_iter = rhs.begin();
+            while (lhs_iter != lhs.end() && rhs_iter != rhs.end()) {
+                if (*lhs_iter < *rhs_iter)
+                    return false;
+                else if (*lhs_iter > *rhs_iter)
+                    return true;
+                lhs_iter++;
+                rhs_iter++;
             }
-            return false;
+            return lhs.size() != rhs.size();
         }
 
         /// @brief Compares the contents of lhs and rhs lexicographically.
         /// @param lhs,rhs deques whose contents to compare
         template <class U, class Alloc>
-        friend bool operator<(const Deque<U, Alloc>& lhs, const Deque<U, Alloc>& rhs){
-            return !(lhs > rhs) && (lhs != rhs);
+        friend bool operator<(const Deque<U, Alloc>& lhs,
+                              const Deque<U, Alloc>& rhs) {
+            auto lhs_iter = lhs.begin(), rhs_iter = rhs.begin();
+            while (lhs_iter != lhs.end() && rhs_iter != rhs.end()) {
+                if (*lhs_iter < *rhs_iter)
+                    return true;
+                else if (*lhs_iter > *rhs_iter)
+                    return false;
+                lhs_iter++;
+                rhs_iter++;
+            }
+            return lhs.size() != rhs.size();
         }
 
         /// @brief Compares the contents of lhs and rhs lexicographically.
         /// @param lhs,rhs deques whose contents to compare
         template <class U, class Alloc>
         friend bool operator>=(const Deque<U, Alloc>& lhs,
-                               const Deque<U, Alloc>& rhs){
-            return ((lhs > rhs) || (lhs == rhs));
+                               const Deque<U, Alloc>& rhs) {
+            auto lhs_iter = lhs.begin(), rhs_iter = rhs.begin();
+            while (lhs_iter != lhs.end() && rhs_iter != rhs.end()) {
+                if (*lhs_iter < *rhs_iter)
+                    return false;
+                else if (*lhs_iter > *rhs_iter)
+                    return true;
+                lhs_iter++;
+                rhs_iter++;
+            }
+            return lhs.size() == rhs.size();
         }
 
         /// @brief Compares the contents of lhs and rhs lexicographically.
         /// @param lhs,rhs deques whose contents to compare
         template <class U, class Alloc>
         friend bool operator<=(const Deque<U, Alloc>& lhs,
-                               const Deque<U, Alloc>& rhs){
-            return ((lhs < rhs) || (lhs == rhs));
+                               const Deque<U, Alloc>& rhs) {
+            auto lhs_iter = lhs.begin(), rhs_iter = rhs.begin();
+            while (lhs_iter != lhs.end() && rhs_iter != rhs.end()) {
+                if (*lhs_iter < *rhs_iter)
+                    return true;
+                else if (*lhs_iter > *rhs_iter)
+                    return false;
+                lhs_iter++;
+                rhs_iter++;
+            }
+            return lhs.size() == rhs.size();
         }
 
         // operator <=> will be handy
-
-        const_iterator get_it(value_type v){
-            size_type it = 0;
-            for(Node<value_type>* _curr = first; _curr != nullptr; _curr = _curr->_next){
-                if(_curr->value == v){
-                    const_iterator i;
-                    i._cur = _curr;
-                    return i;
-                }
-                it++;
-            }
-        }
-
-    private:
-        value_type size_node = 0;
-        Node<value_type>* first = nullptr;
-        Node<value_type>* last = nullptr;
-        Allocator allocate;
     };
 
-    /// NON-MEMBER FUNCTIONS (not implemented)
+/// NON-MEMBER FUNCTIONS
 
-    /// @brief  Swaps the contents of lhs and rhs.
-    /// @param lhs,rhs containers whose contents to swap
+/// @brief  Swaps the contents of lhs and rhs.
+/// @param lhs,rhs containers whose contents to swap
     template <class T, class Alloc>
-    void swap(Deque<T, Alloc>& lhs, Deque<T, Alloc>& rhs){
-        lhs.swap(rhs);
-    }
+    void swap(Deque<T, Alloc>& lhs, Deque<T, Alloc>& rhs) {}
 
-    /// @brief Erases all elements that compare equal to value from the container.
-    /// @param c container from which to erase
-    /// @param value value to be removed
-    /// @return The number of erased elements.
+/// @brief Erases all elements that compare equal to value from the container.
+/// @param c container from which to erase
+/// @param value value to be removed
+/// @return The number of erased elements.
     template <class T, class Alloc, class U>
-    typename Deque<T, Alloc>::size_type erase(Deque<T, Alloc>& c, const U& value){
-        for(auto p = 0; p < c.size(); p++){
-            if(c[p] == value){
-                c.erase(c.get_it(value));
-                return p;
-            }
-        }
-    }
+    typename Deque<T, Alloc>::size_type erase(Deque<T, Alloc>& c, const U& value);
 
-    /// @brief Erases all elements that compare equal to value from the container.
-    /// @param c container from which to erase
-    /// @param pred unary predicate which returns ​true if the element should be
-    /// erased.
-    /// @return The number of erased elements.
+/// @brief Erases all elements that compare equal to value from the container.
+/// @param c container from which to erase
+/// @param pred unary predicate which returns ​true if the element should be
+/// erased.
+/// @return The number of erased elements.
     template <class T, class Alloc, class Pred>
-    typename Deque<T, Alloc>::size_type erase_if(Deque<T, Alloc>& c, Pred pred){
-        for(auto p = 0; p < c.size(); p++){
-            if(pred[p]){
-                c.erase(pred[p]);
-                return p;
-            }
-        }
-    }
-
-}  // lol
+    typename Deque<T, Alloc>::size_type erase_if(Deque<T, Alloc>& c, Pred pred);
+}  // namespace lab
